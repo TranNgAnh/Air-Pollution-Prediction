@@ -46,3 +46,6 @@ The dataset includes:
 
 ### Conclusion
 Random forest proved effective in predicting PM2.5 concentrations, explaining nearly 50% of the variance. Key predictors included CMAQ values, geographic factors, and AOD. The findings highlight the complexity of air quality disparities and the interplay between environmental and socioeconomic factors, emphasizing the need for nuanced, location-specific policy interventions.
+
+### Team Contribution
+This work is a collective effort of the team members who worked on this project through out the winter quarter of 2024 at UCSD. The members are Shihua Yang, Andy Thong, Adam Jeide, Albert Zhong, and myself, Anh Tran.
