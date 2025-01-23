@@ -1,0 +1,748 @@
+---
+title: "CS02 - Predicting Annual Air Pollution"
+author: "Shihua Yang, Andy Thong, Adam Jeide, Albert Zhong, Anh Tran"
+output: 
+  html_document:
+    theme: united
+    highlight: tango
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    code_folding: show
+---
+
+## Background and Introduction
+
+Air pollution is a major health concern, contributing to nearly 5 million global deaths in 2017 and ranking as the fifth leading risk factor for mortality (IHME, 2019). Although many efforts have been made to reduce this pollution, numerous areas still exceed the World Health Organization guidelines for safety[^1].
+
+Particulate matter, especially fine particles (\(PM_{2.5}\)), is particularly harmful due to its ability to penetrate deep into the respiratory system. Exposure to \(PM_{2.5}\) has been linked to conditions such as asthma, cardiovascular disease, and reduced lung function[^2]. Children and older adults are at an even higher risk of developing these conditions[^3].
+
+These issues make the accurate prediction of annual air pollution concentrations critical. Identifying high-risk areas provides essential public health information. Traditional monitoring systems are sparse and fail to capture localized pollution "hotspots" or micro-environments. By utilizing predictive modeling techniques, this work aims to enhance our understanding of air pollution and its patterns.
+
+## Research Question
+
+This case study seeks to address the question: *With what accuracy can we predict U.S. annual average air pollution concentrations?*
+
+```{r setup, include=FALSE}
+# control global Rmd chunk settings
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+### Load packages
+
+```{r load-packages, message=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(readr)
+#install.packages("kableExtra")
+library(kableExtra) # For table
+#install.packages(c("randomForest", "vip", "recipes"))
+library(randomForest)
+library(vip)
+library(recipes)
+#install.packages("udunits2",configure.args='--with-udunits2-include=/usr/local/lib')
+#install.packages(c('units', 's2'))
+#install.packages('sf')
+#library(sf)
+#install.packages(c('maps', 'rnaturalearth'))
+library(maps)
+#library(rnaturalearth)
+#install.packages('corrplot')
+library(corrplot)
+```
+
+## The Data
+
+Our dataset comprehensively contains data about environmental and demographic analysis at various geographic areas across the United States. It contains air quality measurements, including Community Multiscale Air Quality (CMAQ), a computational modeling system that utilize the physics of the atmosphere and weather data to predict air pollution from the Unites States Environmental Protection Agency (EPA). Along side is Aerosol Optical Depth (AOD) data that contain the measurement from a NASA satellite that based on the diffraction of a laser to proxy for particulate pollution. alongside various measures of impervious surface area (imp_a) at different buffer distances measuring development of that surrounding areas. The data also includes detailed road network information (log_dist_to_prisec and various road length measurements), EPA National Emissions Inventory (NEI) data for PM2.5 and PM10 particulate matter from 2008, and socioeconomic indicators such as educational attainment (from high school to college graduate degrees) and poverty levels. It also includes data of geographic identifiers like FIPS codes, latitude/longitude coordinates, and population density measures for both counties and ZIP code tabulation areas (zcta).
+
+Table:
+
+```{r, echo=FALSE}
+table <- data.frame(
+  Features = c(
+    "id", "fips", "Lat", "Lon", "state", "county", "city", "CMAQ", "zcta", 
+    "zcta_area", "zcta_pop", "imp_a500", "imp_a1000", "imp_a5000", "imp_a10000", 
+    "imp_a15000", "county_area", "county_pop", "Log_dist_to_prisec", 
+    "log_pri_length_5000", "log_pri_length_10000", "log_pri_length_15000", 
+    "log_pri_length_25000", "log_prisec_length_500", "log_prisec_length_1000", 
+    "log_prisec_length_5000", "log_prisec_length_10000", "log_prisec_length_15000", 
+    "log_prisec_length_25000", "log_nei_2008_pm25_sum_10000", 
+    "log_nei_2008_pm25_sum_15000", "log_nei_2008_pm25_sum_25000", 
+    "log_nei_2008_pm10_sum_10000", "log_nei_2008_pm10_sum_15000", 
+    "log_nei_2008_pm10_sum_25000", "popdens_county", "popdens_zcta", "nohs", 
+    "somehs", "hs", "somecollege", "associate", "bachelor", "grad", "pov", 
+    "hs_orless", "urc2013", "urc2006", "aod"
+  ),
+  Details = c(
+    "Monitor number: county before decimal, monitor after decimal.",
+    "Federal information processing standard number for the county.",
+    "Latitude of the monitor in degrees.",
+    "Longitude of the monitor in degrees.",
+    "State where the monitor is located.",
+    "County where the monitor is located.",
+    "City where the monitor is located.",
+    "Estimated air pollution from CMAQ model.",
+    "Zip Code Tabulation Area where the monitor is located.",
+    "Land area of the zip code area (m²).",
+    "Population in the zip code area.",
+    "Impervious surface measure within 500m radius.",
+    "Impervious surface measure within 1000m radius.",
+    "Impervious surface measure within 5000m radius.",
+    "Impervious surface measure within 10000m radius.",
+    "Impervious surface measure within 15000m radius.",
+    "Land area of the county (m²).",
+    "Population of the county.",
+    "Log of the distance to a primary/secondary road from the monitor.",
+    "Log of primary road length within 5000m radius (meters).",
+    "Log of primary road length within 10000m radius (meters).",
+    "Log of primary road length within 15000m radius (meters).",
+    "Log of primary road length within 25000m radius (meters).",
+    "Log of primary and secondary road length within 500m radius (meters).",
+    "Log of primary and secondary road length within 1000m radius (meters).",
+    "Log of primary and secondary road length within 5000m radius (meters).",
+    "Log of primary and secondary road length within 10000m radius (meters).",
+    "Log of primary and secondary road length within 15000m radius (meters).",
+    "Log of primary and secondary road length within 25000m radius (meters).",
+    "Log of emissions (PM2.5) sum within 10000m radius (tons).",
+    "Log of emissions (PM2.5) sum within 15000m radius (tons).",
+    "Log of emissions (PM2.5) sum within 25000m radius (tons).",
+    "Log of emissions (PM10) sum within 10000m radius (tons).",
+    "Log of emissions (PM10) sum within 15000m radius (tons).",
+    "Log of emissions (PM10) sum within 25000m radius (tons).",
+    "Population density of the county (people/km²).",
+    "Population density of the zip code area (people/km²).",
+    "Percentage of people without a high school degree.",
+    "Percentage of people with some high school education.",
+    "Percentage of people with a high school degree.",
+    "Percentage of people with some college education.",
+    "Percentage of people with an associate degree.",
+    "Percentage of people with a bachelor’s degree.",
+    "Percentage of people with a graduate degree.",
+    "Percentage of people living in poverty (2008).",
+    "Percentage of people with high school degree or less.",
+    "Urban-rural classification of the county (2013).",
+    "Urban-rural classification of the county (2006).",
+    "Aerosol Optical Depth measurement (proxy for pollution)."
+  )
+)
+
+kable(head(table, 49), booktabs = TRUE) %>%
+  kable_styling(font_size = 12)
+```
+
+
+### Data Import
+
+```{r read-data, message=FALSE}
+pm_data <- read_csv("data/pm25_data.csv")
+```
+
+### Data Wrangling
+
+```{r}
+pm_data <- pm_data |>
+  mutate(across(c(id, fips, zcta, urc2013, urc2006), as.factor),
+         urc2013 = fct_recode(urc2013, 
+                              'large central metro' = '1',
+                              'large fringe metro' = '2',
+                              'medium metro' = '3',
+                              'small metro' = '4',
+                              'micropolitan' = '5',
+                              'noncore' = '6'),
+         urc2013 = fct_relevel(urc2013,
+                               'large central metro',
+                               'large fringe metro',
+                               'medium metro',
+                               'small metro',
+                               'micropolitan',
+                               'noncore'),
+         urc2006 = fct_recode(urc2006, 
+                              'large central metro' = '1',
+                              'large fringe metro' = '2',
+                              'medium metro' = '3',
+                              'small metro' = '4',
+                              'micropolitan' = '5',
+                              'noncore' = '6'),
+         urc2006 = fct_relevel(urc2006,
+                               'large central metro',
+                               'large fringe metro',
+                               'medium metro',
+                               'small metro',
+                               'micropolitan',
+                               'noncore'))
+```
+
+Here, we aim to wrangle the data by first setting the categorical values into factors, and then changing the URC (urban-rural classification) codes to be more meaningful based off of the CDC classifications: \
+**Large central metro—Counties** in MSAs of 1 million or more population that: 1. Contain the entire population of the largest principal city of the MSA, or 2. Have their entire population contained in the largest principal city of the MSA, or 3. Contain at least 250,000 inhabitants of any principal city of the MSA. \
+**Large fringe metro—Counties** in MSAs of 1 million or more population that did not qualify as large central metro counties. \
+**Medium metro—Counties** in MSAs of populations of 250,000 to 999,999. \
+**Small metro—Counties** in MSAs of populations less than 250,000. \
+**Micropolitan—Counties in micropolitan** statistical areas. \
+**Noncore—Nonmetropolitan** counties that did not qualify as micropolitan."[^4]. Doing this will help our linear regression and random forest models later on in this report. 
+
+```{r}
+pm_data |> 
+  count(urc2013)
+```
+
+```{r}
+pm_data |> 
+  count(urc2006)
+```
+
+Checking count between 2006 and 2013, values stayed relatively the same. Non-core nonmetropolitan is really small compared to other values while large centro metropolitan and medium metropolitan seem to dominate the count.
+
+```{r}
+# Calculate the national average across all education levels
+national_total_avg <- mean(pm_data$nohs + pm_data$somehs + pm_data$hs, na.rm = TRUE)
+
+# Reshape the data for all education levels
+education_long <- pm_data |>
+  pivot_longer(
+    cols = c("nohs", "somehs", "hs"),
+    names_to = "category",
+    values_to = "education_value"
+  ) |>
+  mutate(category = factor(category,
+                          levels = c("nohs", "somehs", "hs"),
+                          labels = c("No High School",
+                                   "Some High School",
+                                   "High School Graduate")))
+```
+
+This wrangle for high school let us look at the different level of high school education level in each county.
+
+### EDA
+
+```{r}
+present_states <- pm_data |>
+  distinct(state) |>
+  pull(state)
+
+missing_states = c("Alaska","Hawaii")
+
+missing_states %in% present_states
+```
+
+The states only presented 49 out of the 51 states and was doubled check to see if the missing states are Alaska and Hawaii. This would show that no samples from Alaska and Hawaii is present so can only represents the contiguous United States only.
+
+```{r fig.height = 7, fig.width = 7}
+pm_cor <- cor(pm_data |> dplyr::select_if(is.numeric))
+corrplot::corrplot(abs(pm_cor), order = "hclust", tl.cex = 0.5, cl.lim = c(0, 1))
+```
+
+This heat map showed the strength of each features compared to one another. Couple of things to note after seeing the graph. Value will be the main feature that we want to see if there are any correlation, but there are no items that showed a high strength of correlation, only a small correlation at *imp_a5000*, *imp_a10000*, and *imp_a15000*. This heat map also verify our data that it make sense as the *log_nei_2008_pm10_sum_...* and *log_nei_2008_pm25_sum_...* sharing high correlation to one another as the increasing number represent the radius distance around the monitor. Similar to *log_prisec_length_...* and *log_pri_length_...* sharing a high correctional because the increasing number representing increasing distance and the measuring of primary and secondary road. However, the *log_prisec_length_1000*, *log_prisec_length_500*, *log_dist_to_prisec* showed high correlation to one another but not to other *log_prisec_length_...*. Lastly, the education percentage seem to have some correlation to one another as well.
+
+
+```{r fig.height=8, fig.width=8}
+pm_data |>
+  mutate(log_zcta_pop = log(zcta_pop + 1), log_popdens_zcta = log(popdens_zcta + 1), log_zcta_area=log(zcta_area+1)) |>
+  select(log_nei_2008_pm10_sum_25000, log_dist_to_prisec, imp_a15000, log_zcta_pop, log_popdens_zcta, log_zcta_area, value, aod) |>
+  GGally::ggpairs()
+```
+
+There are a couple of features that is promising to be good indicators to use as a proxy to see the particulate in the air which are value, and aod. Value indicate the measured amount of particulate matter and aod is from NASA to measure proxy of particulate pollution. If any features have a high correlation with either case, it is a good idea to look at these feature as a way to determine air polution. However, none of the feature have a high correlation, except for imp_a15000 which show 0.515 correlation, the highest correlation to value and aod. Features such as zcta_pop, popdens_zcta, zcta_area have a really high values in the first graph and I have to log transform it in order to have a clearer comparison. In this case by log transforming, we can see a negative correlation in log_popdens_zcta and log_zcta_area which can be translated to as area of that zipcode increase, the lesser the population density of that zipcode. This would make sense as rural area have a lot of land and not of people living in it compared to city. The other feature that is useful is log_popdens_zcta and imp_a15000 that have a 0.616 correlation which state that as the population density within the zipcode increase, the more impervious surface measurement of around the monitor.
+
+```{r}
+lin_mod <- linear_reg() |>
+  set_engine("lm")
+
+mod_all_values <- lin_mod |>
+  fit(value ~ ., data = pm_data) 
+
+# display results
+mod_all_values |>
+  tidy() |>
+  filter(estimate < 0) |>
+  arrange(estimate)
+
+mod_all_values |>
+  tidy() |>
+  filter(estimate > 0) |>
+  arrange(estimate)
+```
+
+This is to test to see which feature would grow the most with values. While this is distinct from the actual correlation coefficient, it is still good to see the sheer extent of growth/shrinkage depending on the variable. From this, I can see that more variables/cities grow with value over the other way around where it decreases as value increases (471 vs 311). Also, it is showed that the numerical values tended to be the high positive values, while the negative values were pretty much exclusively cities. Given how the numeric values were typically things such as size, and unsurprisingly area was the one that grew the most with pollution value, and thus those negative value cities were likely small cities.
+
+
+```{r fig.width = 10, fig.height=12}
+# Create the visualization
+ggplot(education_long, aes(y = state, x = education_value)) +
+  geom_col(aes(fill = category), position = "dodge") +
+  geom_vline(aes(xintercept = national_total_avg,
+                 linetype = paste("National Average:", round(national_total_avg, 1), "%")),
+             color = "black",
+             linewidth = 0.8) +
+  scale_linetype_manual(values = "solid", name = "") +  # This puts the national average in legend
+  labs(
+    title = "Educational Attainment by State",
+    x = "Percent",
+    y = "State",
+    fill = "Education Level"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank(),
+    legend.box = "horizontal",
+    plot.title.position = "plot"
+  ) +
+  scale_fill_manual(values = c("No High School" = "#ece7f2", "Some High School" = "#a6bddb", "High School Graduate" = "#2b8cbe"))
+
+```
+
+This graph is comparing the education level of the population in every state. However, college educated are not included in order to get a better sense of the percentage of the population that has a high school diploma. The graph showed a very significant results displaying almost a majority of states having below national average of the population graduating high school. Although there are several outliers in all three levels exceeding past the national average, those outliers cannot be ignored. These potentially may indicate other factors that play into educational attainment levels such as socieconomic hardships. Furthermore, this graph can direct our attention to states that need educational support such as more federal and state funding or lead to policy changes. 
+
+
+```{r}
+pm_data |>
+  ggplot(aes(x = urc2013, y = CMAQ)) +
+  geom_boxplot(fill = 'coral', color = 'black') +
+  theme_minimal() +
+  labs(title = "CMAQ by Urban-Rural Classification (2013)", x = "Urban-Rural Classification (2013)", y = "CMAQ") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 15)) +
+  theme(
+    plot.title.position = "plot")
+
+```
+
+This graph shows the estimated values of air pollution in urban and rural area. From the graph, it looks like the urban area has larger estimated values of air pollution. Categories 1 and 2 (likely most urban areas) have the highest median CMAQ values, around 10. Categories 3 and 4 show intermediate CMAQ values. Categories 5 and 6 (likely most rural areas) have the lowest median CMAQ values, around 6-7. It appears to be a general downward trend in CMAQ values as we move from urban (1) to rural (6) classifications. rural areas (6 & 5) classification also showed that the CMAQ values are varied significantly compared to the urban areas (1-4) while having a lower count.
+
+
+```{r}
+# Scatter plot between percentage of bachelor's degree holders and poverty rate
+ggplot(pm_data, aes(x = bachelor, y = pov)) +
+  geom_point(color = "darkred", alpha = 0.6) +
+  ggtitle("Comparing Bachelor's Degree to Poverty Rate") +
+  xlab("Bachelor's Degree (%)") +
+  ylab("Poverty Rate (%)") +
+  theme_minimal()
+
+
+# Scatter plot between population density and PM2.5 pollution levels
+ggplot(pm_data, aes(x = log(popdens_county), y = log_nei_2008_pm25_sum_10000)) +
+  geom_point(color = "darkgreen", alpha = 0.6) +
+  ggtitle("Population Density vs PM2.5 Pollution Levels") +
+  xlab("Log Population Density") +
+  ylab("Log PM2.5 Sum (10000m radius)") +
+  theme_minimal()
+```
+
+For bachelor's degree it does seem like there is some correlation between the poverty rate being higher when less people get their bachelor's. This difference is less pronounced than I would have expected, however. In the population density vs pollution levels, interestingly, there is a wide variety of log pm 2.5 particles, but not a ton of variance in population density. Most of the data points are crowded at around 0 for population density, which suggests this might be because of outliers.
+
+The value of population density is huge compared to *log_nei_2008_pm25_sum_10000* so it is log transformed in order for us to see the comparison between the two variables. Looking at the graph, there is a positive correlation with the log of population density and *log_nei_2008_pm25_sum_10000*.
+
+```{r}
+# Prepare data for visualization
+state_summary <- pm_data |>
+  group_by(state) |>
+  summarise(
+    avg_somehs = mean(somehs, na.rm = TRUE),
+    avg_pm25 = mean(value, na.rm = TRUE)
+  ) |>
+  arrange(desc(avg_pm25))  # Sort by PM2.5 levels
+
+# Reshape data for grouped bar chart
+state_summary_long <- state_summary |>
+  pivot_longer(
+    cols = c(avg_somehs, avg_pm25),
+    names_to = "metric",
+    values_to = "value"
+  ) |>
+  mutate(
+    metric = recode(metric, 
+                    avg_somehs = "Percent Some High School",
+                    avg_pm25 = "PM2.5 Value")
+  )
+
+# Visualization
+ggplot(state_summary_long, aes(x = reorder(state, -value), y = value, fill = metric)) +
+  geom_col(position = "dodge") +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c("Percent Some High School" = "#a6bddb", "PM2.5 Value" = "#2b8cbe")
+  ) +
+  labs(
+    title = "Comparison of 'Some High School' and PM2.5 by State",
+    x = "State",
+    y = "Value",
+    fill = "Metric"
+  ) +
+  theme(
+    plot.title.position = "plot",
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+Looking at the PM2.5 values compared to percent of population with some high school as a proxy to see how educated that state is. We can see that uneducated level doesn't seem to correlate with having a high pollution value.
+
+## Analysis
+
+```{r}
+pm_data <- pm_data |>
+  mutate(city = case_when(city == "Not in a city" ~ "Not in a city",
+                          city != "Not in a city" ~ "In a city"))
+
+# Data Splitting
+set.seed(1234)
+pm_split <- initial_split(data = pm_data, prop = 2/3)
+train_pm <- training(pm_split)
+test_pm <- testing(pm_split)
+
+# Pre-processing: recipe() + bake()
+novel_rec <- recipe(train_pm) |>
+    update_role(everything(), new_role = "predictor") |>
+    update_role(value, new_role = "outcome") |>
+    update_role(id, new_role = "id variable") |>
+    update_role("fips", new_role = "county id") |>
+    step_dummy(state, county, city, zcta, one_hot = TRUE) |>
+    step_corr(all_numeric()) |>
+    step_nzv(all_numeric()) 
+
+# Running the pre-processing
+prepped_rec <- prep(novel_rec, verbose = TRUE, retain = TRUE)
+baked_train <- bake(prepped_rec, new_data = NULL)
+baked_test_pm <- bake(prepped_rec, new_data = test_pm)
+
+# Specifying and fitting the model
+lm_PM_model <- linear_reg() |>
+  set_engine("lm") |>
+  set_mode("regression")
+
+PM_wflow <- workflow() |>
+  add_recipe(novel_rec) |>
+  add_model(lm_PM_model)
+
+PM_wflow_fit <- fit(PM_wflow, data = train_pm)
+
+# Assessing model fit
+wflowoutput <- PM_wflow_fit |>
+  extract_fit_parsnip() |>
+  broom::tidy()
+
+# Visualizing Model Performance
+wf_fit <- PM_wflow_fit |> 
+  extract_fit_parsnip()
+
+wf_fitted_values <- 
+  broom::augment(wf_fit[["fit"]], data = baked_train) |> 
+  select(value, .fitted:.std.resid)
+
+head(wf_fitted_values)
+
+ggplot(wf_fitted_values, aes(x = value, y = .fitted)) +
+  geom_point() +
+  labs(x = "Actual Outcome Values",
+  y = "Predicted Outcome Values",
+  title = "Model Performance of Value and Predicted Value") +
+  theme(plot.title.position = "plot") +
+  theme_minimal()
+
+# Quantifying Model Performance
+yardstick::metrics(wf_fitted_values, truth = value, estimate = .fitted)
+
+# Cross-Validation
+set.seed(1234)
+vfold_pm <- vfold_cv(data = train_pm, v = 4)
+resample_fit <- fit_resamples(PM_wflow, vfold_pm)
+```
+
+In this analysis, we begin by splitting up the data into 2/3 and testing with 1/3 sets ensuring reproducibility. Then we begin the pre-processing by using the "id" column as an identifier rather than a predictor, converting categorical variables into dummy variables, removing correlated numeric predictors such as CMAQ and AOD, and then eliminating near-zero variance predictors that would not contribute to the model. 
+
+Next we applied this recipe to both training and testing data and then specified a linear regression model. This workflow is then fitted to our training data. We then evaluated the model's performance by comparing predicted versus actual values to calculate the performance metrics. Finally, we then implement a 4-fold cross validation to better assess our model's results across the different subsets of our data. 
+
+The graph showed the result of predicted value and the actual value sharing a positive correlation which is what we wanted. However, the extreme values seem to not being fitted very well and therefore lower the result significantly.
+
+```{r}
+rf_recipe <- recipe(value ~ ., data = train_pm) |>
+  update_role(id, new_role = "id variable") |>
+  step_dummy(all_nominal(), -all_outcomes()) 
+
+# Prep and bake the recipe
+rf_prep <- prep(rf_recipe)
+rf_train <- bake(rf_prep, new_data = NULL)
+rf_test <- bake(rf_prep, new_data = test_pm)
+
+# Train Random Forest model
+set.seed(123)
+rf_model <- randomForest(
+  value ~ ., 
+  data = rf_train,
+  ntree = 500,
+  mtry = floor(sqrt(ncol(rf_train))),
+  importance = TRUE
+)
+
+# Print model summary
+print(rf_model)
+
+# Plot variable importance
+varImpPlot(rf_model,
+           main = "Variable Importance Plot",
+           n.var = 20)
+
+# Get predictions on test set
+rf_predictions <- predict(rf_model, newdata = rf_test)
+
+# Create results dataframe and remove NAs for metric calculation
+results_df <- na.omit(data.frame(
+  actual = rf_test$value,
+  predicted = rf_predictions
+))
+
+# Create prediction vs actual plot
+prediction_df <- data.frame(
+  Actual = rf_test$value,
+  Predicted = rf_predictions
+)
+
+ggplot(prediction_df, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    title = "Random Forest: Predicted vs Actual Values",
+    x = "Actual Values",
+    y = "Predicted Values"
+  )
+
+# Create residuals plot
+prediction_df$Residuals <- prediction_df$Predicted - prediction_df$Actual
+ggplot(prediction_df, aes(x = Predicted, y = Residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    title = "Random Forest: Residuals Plot",
+    x = "Predicted Values",
+    y = "Residuals"
+  )
+
+
+```
+
+To further our analysis, we applied a Random Forest model to analyze PM2.5 data. The graph from predicted values and actual values of random forest showed us that it is not all are correctly predicted. It does show a positive correlation and the value are relatively close together but the extreme actual values are not being predicted closely enough. 
+
+Next graph showed us the residuals from predicted values and actual values. The lower residual the better but having a small value residual of 0-5 is a pretty good indicator. We can get a better look at the predicted values and how it is having a big residuals representing a really off prediction.
+
+```{r}
+# Feature importance from Random Forest
+importance_df <- as.data.frame(importance(rf_model))
+importance_df$feature <- rownames(importance_df)
+
+# Plot top 20 features
+ggplot(
+  importance_df |>
+    arrange(desc(IncNodePurity)) |>
+    head(20),
+  aes(x = reorder(feature, IncNodePurity), y = IncNodePurity)
+) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Top 20 Most Important Features by Increase Node Purity",
+    x = "Features",
+    y = "Importance (Node Purity Increase)"
+  ) +
+  theme(plot.title.position = "plot")
+
+ggplot(
+  importance_df |>
+    arrange(desc(`%IncMSE`)) |>
+    head(20),
+  aes(x = reorder(feature, `%IncMSE`), y = `%IncMSE`)
+) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Top 20 Most Important Features by Percent Increase MSE",
+    x = "Features",
+    y = "Importance (%IncMSE)"
+  ) +
+  theme(plot.title.position = "plot")
+```
+
+This graph show the importance increases with each features in both percent increase Mean Square Error and Increase Node Purity. Both highlighted the importance of the CMAQ being the valuable feature for prediction.
+
+```{r}
+# Calculate performance metrics with cleaned data
+rf_rmse <- sqrt(mean((results_df$actual - results_df$predicted)^2))
+rf_mae <- mean(abs(results_df$actual - results_df$predicted))
+rf_r2 <- 1 - sum((results_df$actual - results_df$predicted)^2) / 
+             sum((results_df$actual - mean(results_df$actual))^2)
+
+performance_metrics <- data.frame(
+  Metric = c("RMSE", "MAE", "R-squared"),
+  Value = c(round(rf_rmse, 3), round(rf_mae, 3), round(rf_r2, 3))
+)
+
+knitr::kable(performance_metrics, caption = "Random Forest Performance Metrics")
+```
+
+We then evaluate the model's performance by comparing the model's predictions against actual values in the dataset through multiple metrics: Root Mean Square Error (RMSE) to measure prediction accuracy, Mean Absolute Error (MAE) to understand average prediction deviation, and R-Squared to assess the model's power. The RMSE being 1.85 mean that on average, the models predictions deviate from the actual values by approximately 1.85. $R^2$ being 0.492 show that the model explains 49.2\% of the variability in PM2.5 values.
+
+```{r}
+collect_metrics(resample_fit)
+print(rf_r2)
+```
+
+From here, we can see that the r squared of our random forest model is a fair amount better than linear regression 30.6\% vs. 49.2\%, and thus appears to reach a reasonable level of predictive power. To truly decide how "good" it is at predicting pollution however, further testing is needed (which is shown below).
+
+```{r}
+#create a full set of predicted values for both models
+lr_predict <- pm_data |>
+  mutate(pred_value = predict(PM_wflow_fit, new_data = pm_data)$.pred,
+         diff_value = abs(value - pred_value))
+
+rf_test <- bake(rf_prep, new_data = pm_data)
+rf_all_predict <- pm_data |>
+  mutate(pred_value = predict(rf_model, newdata = rf_test),
+         diff_value = abs(value - pred_value))
+
+#function for representing all our values on a map
+spatial_viz <- function(data, val_type) 
+{
+  # I honestly don't know why directly doing color = val_type didn't work so I had to do this
+  if(val_type == 'pred')
+  {
+    ggplot(data, aes(x = lon, y = lat, color = pred_value)) +
+      geom_point(alpha = 0.6) +
+      scale_color_gradientn(colours = topo.colors(7),
+                         na.value = "transparent",
+                         breaks = c(0, 10, 20),
+                         labels = c(0, 10, 20),
+                         limits = c(0, 23.5),
+                         name = "PM ug/m3") +
+      theme_minimal() +
+      labs(title = "Predicted Spatial Distribution of PM2.5 Values",
+           color = "PM2.5 Value",
+           x = "Longitude",
+           y = "Latitude")
+  }
+  else if(val_type == 'diff')
+  {
+    ggplot(data, aes(x = lon, y = lat, color = diff_value)) +
+      geom_point(alpha = 0.6) +
+      scale_color_gradientn(colours = topo.colors(7),
+                         na.value = "transparent",
+                         breaks = c(0, 5, 10),
+                         labels = c(0, 5, 10),
+                         limits = c(0, 12.5),
+                         name = "PM ug/m3") +
+      theme_minimal() +
+      labs(title = "Difference between Actual and Predicted Distribution of PM2.5 Values",
+           color = "PM2.5 Value",
+           x = "Longitude",
+           y = "Latitude")
+  }
+  else
+  {
+    ggplot(data, aes(x = lon, y = lat, color = value)) +
+      geom_point(alpha = 0.6) +
+      scale_color_gradientn(colours = topo.colors(7),
+                         na.value = "transparent",
+                         breaks = c(0, 10, 20),
+                         labels = c(0, 10, 20),
+                         limits = c(0, 23.5),
+                         name = "PM ug/m3") +
+      theme_minimal() +
+      labs(title = "Spatial Distribution of PM2.5 Values",
+           color = "PM2.5 Value",
+           x = "Longitude",
+           y = "Latitude")
+  }
+}
+
+spatial_viz(pm_data, 'default') #actual data
+spatial_viz(lr_predict, 'pred') #predicted values of Linear Regression
+spatial_viz(na.omit(rf_all_predict), 'pred') #predicted values of Random Forest
+spatial_viz(lr_predict, 'diff') #difference values of Linear Regression
+spatial_viz(na.omit(rf_all_predict), 'diff') #difference values of Random Forest
+```
+
+The first graph is our baseline graph, which shows us approximately where each monitor is located within the continuous United States and outlining it, as well as how much PM 2.5 each monitor picked up in that location (with dark blue indicate low values and green/yellow indicating higher values). \
+The next two graphs are the same graph, except instead of the true value it shows the predicted values of PM 2.5 pollution for each monitor using both our Linear Regression and our Random Forest models. From a visual glance, the Linear Regression is generally fairly accurate with middle values (~10 PM ug/m3), but struggles with values at the tail end of our distribution (~0 PM for the low end and ~20 PM ug/m3 for the high end). Meanwhile, the Random Forest model is generally fairly accurate, but is missing some datapoints. \
+To make this clearer, the absolute value of the residuals are also plotted on this space. From this, we can see that the Linear Regression model seems to struggle in high density areas such as California. Meanwhile, although the Random Forest Model does have a few high differences around California as well, there is noticeably a lot less green/yellow values and more dark blue ones, indicating there not being too many areas in which the predicted values are very different from the actual values.
+
+```{r}
+education_long_nohs <- education_long |>
+  filter(category == 'No High School')
+
+education_long_nohs_filtered <- education_long_nohs |>
+  filter(education_value > 20)
+
+education_long_colorado <- education_long |>
+  filter(state == 'Colorado')
+
+education_long_louisiana <- education_long |>
+  filter(state == 'Louisiana')
+
+education_long_montana <- education_long |>
+  filter(state == 'Montana')
+
+plot_education <- function(data)
+{
+    ggplot(data, aes(x = lon, y = lat, color = education_value)) +
+        geom_point(alpha = 0.6) +
+        scale_color_gradientn(colours = topo.colors(7),
+                           na.value = "transparent",
+                           breaks = c(0, 50, 100),
+                           labels = c(0, 50, 100),
+                           limits = c(0, 100),
+                           name = "% No HS") +
+        theme_minimal() +
+        labs(title = "Spatial Distribution of Highest Education being No High School",
+             color = "% No HS",
+             x = "Longitude",
+             y = "Latitude")
+}
+
+plot_education(education_long_nohs)
+plot_education(education_long_nohs_filtered)
+spatial_viz(education_long_nohs_filtered, 'default')
+plot_education(education_long_colorado)
+spatial_viz(education_long_colorado, 'default')
+plot_education(education_long_louisiana)
+spatial_viz(education_long_louisiana, 'default')
+plot_education(education_long_montana)
+spatial_viz(education_long_montana, 'default')
+```
+
+Since we also wanted to know how education played into these pollution values, we also plotted out the spatial distribution of what areas had "no high school" as their highest education obtained. The first graph shows all of them, and the second graph shows ones that had a relatively higher value (which we defined as >20%). From the filtered second graph, paired with the following graph which shows their pollution values, we can see that they do indeed tend to be more polluted, with most values being in the green/yellow range that suggests higher pollution. We also decided to look more closely at some specific states based off of our high school education chart earlier, notably Colorado and Louisiana due to those two being notable outliers for having high levels of no/only some high school completion, as well as Montana to represent one of the outliers of high levels of high school completion. From this, we get mixed results: Colorado ends up having relatively good air with basically every value being dark or light blue, but Lousiana has mostly green values. Strangely, Montana, while having good high school completion, tends to have light blue or green(!) values.
+
+## Results & Discussion 
+Our analysis employed both linear regression and random forest models to predict annual average air pollution concentrations across the contiguous United States. The results provide us several key findings:
+
+1. The random forest model demonstrated better predictive performance compared to linear regression, with an R-squared value of 0.492 versus 0.306. It explained approximately 49.2% of the variance in PM2.5 concentrations. Linear regression performed adequately for middle pollution levels (~10 μg/m³) but struggled with extreme values (both high and low). Random forest predictions were generally more accurate across different range of pollution levels.
+
+2. The random forest variable importance analysis revealed several important factors influencing PM2.5 concentrations:
+CMAQ shows substantially higher importance than all other variables, validating its use as a predictive tool. Geographic factors (latitude and county area) strongly influences PM2.5 concentrations. AOD measurements provide significant predictive power.
+
+3. Our exploratory data analysis uncovered several potential patterns:
+Urban-rural difference: CMAQ values showed a clear decreasing trend from urban to rural areas, with highest concentrations in large urban area.
+Educational level: Most states showed below-national-average high school completion rates, suggesting potential social and economic influences on air quality. A weak negative correlation exists between bachelor's degree attainment and poverty rates. While areas with higher educational attainment tend to have lower poverty rates, this relationship is less strong than we expected suggesting that other factors other than education may be significant roles in determining local poverty levels.
+Population density: The result showed positive correlation with PM2.5 levels, particularly in urban areas.
+
+Despite the robustness of our models, limitations remain. Considering our data, there are Hawaii and Alaska state that are missing which could hinder if we want to predict the whole United States of America. In addition, several states do not have enough monitors installed in order to track fine particulate matter and some places have too much monitors which can skew our observation such as the big city compared to rural or remote areas. The trends of seasonal changes might not be captured fully without using more sequential data or not going further back enough. Regarding our model, Random Forest is powerful but it is a "black box" model that can make it hard to interpret relationships between variables. We also did not consider the socioeconimic factors, local policies or natural disasters that might have cause more pollutants. 
+
+Future research should focus on integrating a real time data that covered all of the United States. Exploring hybrid models with principal component analysis can reduce the dimension and seeing the data in a different way.
+
+## Extension
+
+Further analysis of our dataset prompts an important extension question: Do areas with unusual educational attainment patterns experience distinct air pollution challenges? Two notable outliers emerged in our initial analysis of educational attainment: Louisiana, with an unusually high proportion of residents lacking high school education and Colorado, showing elevated number of residents with only partial high school completion. Spatial analysis of air pollution patterns, especially PM2.5, reveal some intriguing contrasts between these educational outliers. Colorado, despite its educational anomaly, demonstrates great air quality with low PM2.5 values. Conversely, Louisiana exhibits notably higher PM2.5 concentrations. Adding further complexity to this analysis is Montana, which presents a case with high high school completion yet unexpected elevated PM2.5 levels. While the aggregate data visually suggests a trend between educational attainment and pollution levels, these varying patterns from specific state case studies challenge straightforward correlations between educational attainment and air quality, suggesting that environmental outcomes are influenced by a more complex web of factors beyond educational achievement alone. Understanding these outliers is crucial for policy interventions, as they demonstrate that the relationship between education and air quality is not uniform across different regional contexts. The presence of these contrasting patterns suggests the need to examine other socioeconomic factors such as industrial presence, economic activities, and local policy frameworks that might simultaneously influence both educational attainment and air quality outcomes.
+
+## Conclusion
+This project utilized both linear regression and random forest models to predict annual average PM2.5 concentrations across the contiguous United States. Our analysis highlights the strengths and limitations of these modeling approaches, the key predictors of air pollution, and the broader patterns underlying air quality disparities. Random forest model emerged as the stronger predictive tool that explaining near half (49.2\%) of the variance in PM2.5 levels. Key predictors of PM2.5 levels included CMAQ values, geographic facors (e.g.. latitude and county area), and aerosol optical depth (AOD) measurements.
+
+## Reference
+[^1]: Institute for Health Metrics and Evaluation (IHME). (2019). *State of Global Air Report*.
+[^2]: U.S. Environmental Protection Agency (EPA). (2019). *Our Nation's Air Report*.
+[^3]: State of Global Air. (2018). *Air Pollution and Health Impacts*.
+[^4]: US Department of Health and Human Services. (2014). *2013 NCHS Urban-Rural Classification Scheme for Counties*.
